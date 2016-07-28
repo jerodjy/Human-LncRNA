@@ -1,0 +1,221 @@
+#The goal of this pipeline is to obtain the genomic positions of lncRNA's exons
+#in a bed12 file (using bedtools or ucsc genome browser) and to extract their 
+#sequences from the dataset of Hezroni et al. 
+
+#I will work with the next two files:
+#AllInfo_LncRNAs_SecondDataset_StrandSpecific_Human.txt
+#LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific.txt
+
+#####################
+## Comparing files ##
+#####################
+
+#First I need to verify if both files have the same data. 
+#To do this, I compared the name of genes (without considering exons) and they were the same.
+diff <(cut -f 1 LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific.txt | sort | uniq) <(cut -f 1 AllInfo_LncRNAs_SecondDataset_StrandSpecific_Human.txt | sort | uniq)
+#This command only printed the headers.
+#Afterwards, I summed the amount of exons reported on the 6th column of AllInfo.. 
+#matching with the total of rows in the LncRNAs.. file where every exon is given
+#per row.
+cut -f 1,6 AllInfo_LncRNAs_SecondDataset_StrandSpecific_Human.txt | awk '{sum+=$2} END {print sum}'
+#38834 vs 38835
+#Nevertheless, LncInfo.. had an extra row without taking into account the headers.
+#I did all the exon IDs based on the name of the locus and the number of exons. There were no differences but the header
+diff <(cut -f 1,6 AllInfo_LncRNAs_SecondDataset_StrandSpecific_Human.txt | awk 'NR>1{for(i=1;i<=$2;i++) print $1"."i}' | sort) <(cut -f 2 LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific.txt | sort)
+
+#All exons and genes match in both files.
+
+#########################
+## Converting to bed12 ##
+#########################
+
+#First I have to convert the AllInfo.. file into a bed6.
+awk '{print $3,$4,$5,$1,0,$6}' LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific.txt > LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific.bed
+#I deleted the header, changed the strand format and the delimiters to tabs with vim
+grep -v 'chrGL' LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific.bed > LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean.bed
+#Also I deleted 38 exons (from a total of 38,834) with a messy annotation (eg: GL000214)
+
+#Running the bash script that runs the perl script that converts bed6 -> bed12 and filters IDs.
+#qsub Run_queue.sh # I counldn't do this
+#This is the command it runs
+perl /LUSTRE/usuario/selene/JE_ROTACION/Data/Scripts/exons2bed.pl LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean.bed > LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12.bed
+
+################################################
+## Intersect 1000 genomes and lncRNA datasets ##
+################################################
+
+#In order to make the process faster, I sorted the two files to intersect
+sort -k1,1 -k2,2n ALL.atDNA.biAllelicSNPnoDI.genotypes.bim.bed > Sorted_ALL.atDNA.biAllelicSNPnoDI.genotypes.bim.bed
+sort -k1,1 -k2,2n LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12.bed > Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12.bed
+
+bedtools intersect -sorted -b /LUSTRE/usuario/selene/JE_ROTACION/Data/Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12.bed -a /LUSTRE/usuario/selene/JE_ROTACION/Data/Sorted_ALL.atDNA.biAllelicSNPnoDI.genotypes.bim.bed  > /LUSTRE/usuario/selene/JE_ROTACION/Data/LncRNAs_ExonBlock_1000_genomes_intersection.bed
+
+#5738782 SNPs resulted from the merging.
+
+#Due to repeated RSIDs I will work with this dataset
+cut -f 4 LncRNAs_ExonBlock_1000_genomes_intersection.bed | sort | uniq -c | sort -n | grep '    1 ' -v | sed 's/      [0-9] //' > repeated_RSID.txt 
+fgrep -f repeated_RSID.txt LncRNAs_ExonBlock_1000_genomes_intersection.bed -v > LncRNAs_ExonBlock_1000_genomes_intersection_clean.bed
+
+#5353135 SNPs resulted after cleaning
+
+#Nevertheless, there were 16 SNPs with a "." RsID
+#
+#			I could run this to fix it... I didn't. Plink should have removed all the repeated "." but must have left one of those IDs
+#
+cut -f4 LncRNAs_ExonBlock_1000_genomes_intersection_clean.bed | grep "\." -v
+
+#Final number of SNPs considered: 5,353,119
+
+##################################################
+## Obtaining lncRNA frequencies per populations ##
+###################################################
+
+#First I extract the intersection SNPs from the whole 1000 genome dataset with plink
+plink --bfile /data/reference_panels/1KGP_plink/ALL.atDNA.biAllelicSNPnoDI.genotypes --extract RS_intersection_list --out /data/users/jrodriguez/Documents/Selene/1000_genomes_lncRNA/ALL.atDNA.biAllelicSNPnoDI.genotypes.lncRNA --make-bed
+#I did this step on other server to work with a dataset with reduced number of SNPs (5,000,000 instead of 77,000,000)
+
+#Then obtain a file with all the populations of interest from 1000 genomes
+cut -f6 1KGP3.popinfo.txt | sort | uniq > POP_LIST
+cut -f9 1KGP3.popinfo.txt | sort | uniq > SPOP_LIST
+
+#Manually removed the headers
+#26 populations: ACB, ASW, BEB, CDX, CEU, CHB, CLM, ESN, FIN, GBR, GIH, GWD, IBS, ITU, JPT, KHV, LWK, MSL, MXL, PEL, PJL, PUR, STU, TSI, YRI
+#5 Super Populations: AFR, AMR, EAS, EUR, SAS
+
+#Calculate the minor allele frequencies with --freq for each population dataset
+while IFS='' read -r line || [[ -n "$line" ]]; do 
+grep ${line} /LUSTRE/usuario/selene/JE_ROTACION/Data/1KGP3.popinfo.txt | awk '{ print "1KGP3",$2}' > /LUSTRE/usuario/selene/JE_ROTACION/Data/Frequencies
+/${line}_keepinds  
+plink --bfile /LUSTRE/usuario/selene/JE_ROTACION/Data/1000_genomes_lncRNA/ALL.atDNA.biAllelicSNPnoDI.genotypes.lncRNA --keep /LUSTRE/usuario/selene/JE_R
+OTACION/Data/Frequencies/${line}_keepinds --make-bed --out /LUSTRE/usuario/selene/JE_ROTACION/Data/Frequencies/ALL.atDNA.biAllelicSNPnoDI.genotypes.lncR
+NA.${line} 
+plink --bfile /LUSTRE/usuario/selene/JE_ROTACION/Data/Frequencies/ALL.atDNA.biAllelicSNPnoDI.genotypes.lncRNA.${line} --freq --out /LUSTRE/usuario/selen
+e/JE_ROTACION/Data/Frequencies/lncRNA_${line} ;done < /LUSTRE/usuario/selene/JE_ROTACION/Data/POP_LIST
+
+#qsub Run_plink.sh
+
+#I obtained all the frequency data per population. Now I will summarize it with a perl script and some bash commands
+paste -d lncRNA_*.frq > All_pops_lncRNA_frq.txt
+#Then I deleted the header and removed initial spaces. The perl script will change the variable separation of spaces to tabs.
+
+#I ran the perl script in this way:
+perl /LUSTRE/usuario/selene/JE_ROTACION/Data/Scripts/create_allfreq_table2.pl -table /LUSTRE/usuario/selene/JE_ROTACION/Data/Frequencies/All_pops_lncRNA_frq.txt -threshold 0.10 -poplist /LUSTRE/usuario/selene/JE_ROTACION/Data/POP_LIST
+#qsub Run_perl_table.sh
+
+#These differences told us there were ~175,000 SNPs fixed and less than 2 populations
+#  5175130 All_pops_lncRNA_frq_filtered_informative.txt
+#  5353121 All_pops_lncRNA_frq_filtered.txt
+
+#Furthermore, only 94 SNPs passed the 0.95 threshold
+#All_pops_lncRNA_frq_filtered_informative.txt
+
+#Meanwhile, 691 passed a 0.90 threshold which seems more useful
+#All_pops_lncRNA_frq_filtered_informative90.txt
+
+#Here are the final files located:
+#/LUSTRE/usuario/selene/JE_ROTACION/Data/Frequencies/Filtered_table
+
+################################
+## Obtaining lncRNA sequences ##
+################################
+
+#First of all I need to discard all overlapping genes within the dataset as it is difficult to make inferences of those cases.
+#To do this I used overlapSelect a ucsc genome browser tool in C.
+##In this case there were removed 38 genes.
+
+#These commands are in the local computer
+./overlapSelect -strand -excludeSelf -nonOverlapping /Users/juan_esteban/Documents/LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12.bed /Users/juan_esteban/Documents/LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12.bed /Users/juan_esteban/Documents/overlapselect_output
+grep -f overlapselect_output LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12.bed > LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12_nonoverlapping.bed 
+sort -k1,1 -k2,2n LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12_nonoverlapping.bed > Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12_nonoverlapping.bed 
+
+#Afterwards, I obtained a merged output of each lncRNA with its respective SNP information to work directly with this file
+./overlapSelect -mergeOutput /Users/juan_esteban/Documents/LncRNAs_ExonBlock_1000_genomes_intersection_clean.bed /Users/juan_esteban/Documents/Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12_nonoverlapping.bed /Users/juan_esteban/Documents/Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12_nonoverlapping_rsID.bed
+
+#In order to obtain the SNP's positions relative to the spliced lncRNA transcript, I used a perl script that uses the next inputs:
+#1.- LncRNA list in bed12 format (Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12.bed)
+#2.- SNPs in bed format (Sorted_ALL.atDNA.biAllelicSNPnoDI.genotypes.bim.bed)
+#3.- Whole genome sequence in fasta format
+
+
+#To make this script I need to consider the strand of the gene to make the calculation of the relative positions
+#
+
+###############
+## Questions ##
+###############
+
+How do I check the version of the data? (there are no specific SNPs to look for)
+Are the extension of the bed files proper?
+To infer the frequencies per population there are several ways to do it: 
+	Plink function -freq to estimate the MAF:
+		I would need to apply it to each population dataset separately, nevertheless the minor allele would change for each population.
+	dbSNP can compute frequencies up to 300000 SNPs
+	dbSNP 1000 genomes can compute frequencies up to 300 SNPs
+
+The MAF SNP input in bed format does not consider frequencies because of the format, right?
+
+################
+## TO DO LIST ##
+################
+
+1.- Obtain a correct bed of the LncRNA.. file (discard GL00.. chromosomes)
+	CHECK
+2.- Create an account in ucsc genome browser
+	CHECK
+3.- Visualize the resulting bed in ucsc genome browser and share the link
+	How do I share a link?
+4.- Look for specific rsIDs and verify the hg version...
+	How do I check this...?
+5.- Run perl script (bed6->bed12) with the new LncRNA.. bed file as the only argument
+	CHECK
+6.- Do the intersection of 1000 genomes and this LncRNA with bedtools
+	CHECK
+7.- Check what is a ss ID. (A non-curated ID from dbSNP in comparison to rs IDs)
+	CHECK
+8.- Obtain frequencies of SNPs in LncRNA per population, try different ways:
+	- Look for a command in plink that obtains that information from a database (using the rsIDs)
+	- Look for a command in plink that does the calculation of frequencies automatically
+	- Look for a command in plink that extracts all SNPs data and compute the frequencies with a script
+	CHECK
+9.- Search a program that deals with MAF from the plink output
+	CHECK
+10.- Do a perl script to apply a threshold to the frequencies per population
+	CHECK
+11.- Use overlap select to obtain the merged input for the perl script, so it only estimates relative positions.
+12.- Do a perl script to obtain the relative positions of SNPs. Relative to the spliced transcript.
+
+
+
+13.- Visualize the resulting bed with lncRNA dataset in ucsc genome browser and share the link. Report the number of variants
+14.- Extract the fasta sequence of this dataset. Exons only. ... Exons of the 1000 genomes found lncRNA or of the complete lncRNA dataset
+15.- Obtain the other 2 datasets and apply the same pipeline 
+
+
+1.- Learn vi, vim.
+	Almost...
+2.- Finish reading the papers and ask questions about it.
+
+#############
+##  Notes  ##
+#############
+
+It is important to check if all beginning positions are smaller than ending positions in - stranded loci.
+There are other "chromosomes" aside from the autosomal and sexual ones. They compose the regions without a known position like the centromeres.
+In ancestry analysis it is not an issue at all because there's plenty of other data.
+
+It would be very useful to make a script that obtains the sequence of lncRNA with their respective SNPs marked. 
+Currently there's no script that can place SNPs on lncRNA sequences (as they are spliced) by using the following data: 
+	Genome
+	LncRNA positions
+	SNPs positions
+
+"aatcgatcGattcgaggaC"
+
+Once I do the intersection of 1000 genomes and lncRNA I will need that script to give the output to structural RNA algorithms.
+
+Remember to use the ensam queue instead of the default one in Mazorca.
+
+The tools from ucsc are very fast because they are programmed in C. Unfortunately they are not very documented.
+
+
+
