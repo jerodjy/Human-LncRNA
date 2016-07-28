@@ -1,8 +1,9 @@
 #The goal of this pipeline is to obtain the genomic positions of lncRNA's exons
-#in a bed12 file (using bedtools or ucsc genome browser) and to extract their 
-#sequences from the dataset of Hezroni et al. 
+#in a bed12 file (using bedtools or ucsc genome browser) to estimate the allele
+#frequencies of SNPs on those exons using 1000 genomes data from all populations. 
+#The lncRNA's exons used in these pipeline were the Hezroni et al. dataset.
 
-#I will work with the next two files:
+#I will work with the next two files from Hezroni et al. [1]:
 #AllInfo_LncRNAs_SecondDataset_StrandSpecific_Human.txt
 #LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific.txt
 
@@ -115,9 +116,13 @@ perl /LUSTRE/usuario/selene/JE_ROTACION/Data/Scripts/create_allfreq_table2.pl -t
 #Here are the final files located:
 #/LUSTRE/usuario/selene/JE_ROTACION/Data/Frequencies/Filtered_table
 
-################################
-## Obtaining lncRNA sequences ##
-################################
+########################################
+## Obtaining SNP's relative positions ##
+########################################
+
+#In order to locate SNPs on a lncRNA sequence we need to know the alternative lncRNA sequence the SNP produces. 
+#Because of that we need to translate the SNP's position relative to the genome to a SNP's position relative to
+#the spliced RNA.
 
 #First of all I need to discard all overlapping genes within the dataset as it is difficult to make inferences of those cases.
 #To do this I used overlapSelect a ucsc genome browser tool in C.
@@ -131,14 +136,31 @@ sort -k1,1 -k2,2n LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpe
 #Afterwards, I obtained a merged output of each lncRNA with its respective SNP information to work directly with this file
 ./overlapSelect -mergeOutput /Users/juan_esteban/Documents/LncRNAs_ExonBlock_1000_genomes_intersection_clean.bed /Users/juan_esteban/Documents/Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12_nonoverlapping.bed /Users/juan_esteban/Documents/Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12_nonoverlapping_rsID.bed
 
-#In order to obtain the SNP's positions relative to the spliced lncRNA transcript, I used a perl script that uses the next inputs:
+#Finally I ran a perl script that computes the relative position of the SNP to its spliced RNA. It uses the last 
+#file as an input and it adds a last column with that relative position. Negative stranded genes had their first
+#nucleotide position on the ending position of the last exon. 
+
+#perl /LUSTRE/usuario/selene/JE_ROTACION/Data/Scripts/SNP_rel_position.pl --intersect /LUSTRE/usuario/selene/JE_ROTACION/Data/Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12_rsID.bed
+ 
+#The ending file with the SNP's relative positions is located it:
+#/LUSTRE/usuario/selene/JE_ROTACION/Data/SNPs_relative_position/SNPs_rel_pos.txt
+
+#################
+## Future work ##
+#################
+
+#This pipeline was intended to obtain the lncRNA sequences with the location of their SNPs differentiatied in different human populations.
+#Nevertheless it was only possible to obtain the relative positions and the frequencies for each human population in the 1000 genomes project.
+
+#In the future it is intended to couple all of the scripts used in this pipeline along with others to obtain an automatized
+#pipeline that will make use of secondary structure data in lncRNAs to look for interacting SNPs. This will shed light on
+#the presence of compensatory mutations that keep maintains the secondary structure of lncRNA, probably suggesting some 
+#important role in the organism.
+
+#The SNP_rel_position.pl script was intended to had the following inputs to obtain the lncRNA sequences with their respective SNPs:
 #1.- LncRNA list in bed12 format (Sorted_LncRNAs_ExonBlockCoords_Complete_Human_SecondDataset_StrandSpecific_clean_bed12.bed)
 #2.- SNPs in bed format (Sorted_ALL.atDNA.biAllelicSNPnoDI.genotypes.bim.bed)
 #3.- Whole genome sequence in fasta format
-
-
-#To make this script I need to consider the strand of the gene to make the calculation of the relative positions
-#
 
 ###############
 ## Questions ##
@@ -182,8 +204,9 @@ The MAF SNP input in bed format does not consider frequencies because of the for
 10.- Do a perl script to apply a threshold to the frequencies per population
 	CHECK
 11.- Use overlap select to obtain the merged input for the perl script, so it only estimates relative positions.
+	CHECK
 12.- Do a perl script to obtain the relative positions of SNPs. Relative to the spliced transcript.
-
+	CHECK
 
 
 13.- Visualize the resulting bed with lncRNA dataset in ucsc genome browser and share the link. Report the number of variants
@@ -213,9 +236,13 @@ Currently there's no script that can place SNPs on lncRNA sequences (as they are
 
 Once I do the intersection of 1000 genomes and lncRNA I will need that script to give the output to structural RNA algorithms.
 
-Remember to use the ensam queue instead of the default one in Mazorca.
+Remember to use the ensam queue instead of the default one in Mazorka.
 
 The tools from ucsc are very fast because they are programmed in C. Unfortunately they are not very documented.
 
+################
+## References ##
+################
 
-
+#1.- Hezroni et al. dataset
+#Hezroni, H., Koppstein, D., Schwartz, M. G., Avrutin, A., Bartel, D. P., & Ulitsky, I. (2015). Principles of long noncoding RNA evolution derived from direct comparison of transcriptomes in 17 species. Cell reports, 11(7), 1110-1122.
